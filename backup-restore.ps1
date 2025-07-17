@@ -1,180 +1,153 @@
-# Backup and Restore from Working Computer to Fix Broken Computer
+# Backup and Restore Utility – Oracle DB Recovery
 
-# Get source and destination computer hostnames
-$sourceComputer = Read-Host "Enter the Source/Working Computer hostname"
-$destiComputer = Read-Host "Enter the Broken/Destination Computer hostname"
+# Get hostnames
+$sourceComputer = Read-Host "Enter the Source (Working) Computer hostname"
+$destiComputer = Read-Host "Enter the Destination (Broken) Computer hostname"
 
-# Define paths for script and temporary directories
+# Paths
 $scriptPath = ".\Scripts\my-oracle-backup.ps1"
 $tempDir = "C:\temp"
+$backupDir = "$tempDir\backup"
+$archiveDmp = "$backupDir\backup.dmp.7z"
+$lastNightBackup = "xstore.bak.gz"
 
-# Copy the backup script to both computers' temp folders
+# Copy backup script to both systems
 Copy-Item -Path $scriptPath -Destination "\\$sourceComputer\c$\temp"
 Copy-Item -Path $scriptPath -Destination "\\$destiComputer\c$\temp"
 
+# Ask user which backup method to use
+$backupChoice = Read-Host "Select Backup Option:`n1. Create new Oracle backup`n2. Use last night's xstore.bak.gz backup"
+
+# Variable to track selected method
+$usedNewBackup = $false
+
 try {
-    # Prompt user for backup option: new or last night's backup
-    $condition = Read-Host "Do you want to copy from last night backup or create a new DB DMP file? `nPress 1 for New DB Backup, or 2 for Last Night DB Backup"
-
-    # Validate user's input
-    if ($condition -eq '1') {
+    if ($backupChoice -eq '1') {
+        $usedNewBackup = $true
         Clear-Host
-        Write-host "You have selected to create a new Backup" -ForegroundColor Cyan
-        Write-host "Creating backup from $sourceComputer ..." -ForegroundColor Green
-        
-        # Create a new backup
+        Write-Host "Creating a new Oracle DB backup on $sourceComputer..." -ForegroundColor Cyan
+
+        # Create new backup on source
         Invoke-Command -ComputerName $sourceComputer -ScriptBlock {
-		$backupDir = "C:\temp\backup"
-		$backupFile = "C:\temp\backup\backup.dmp"
-	
-		# Ensure backup directory exists
-		if (-Not (Test-Path $backupDir)) {
-			New-Item -Path $backupDir -ItemType Directory -Force
-		}
-	
-		# Remove existing backup file if found
-		if (Test-Path $backupFile) {
-			Write-Host "🧹 Removing old backup file..."
-			Remove-Item -Path $backupFile -Force
-		}
+            $backupDir = "C:\temp\backup"
+            $backupFile = "$backupDir\backup.dmp"
 
-		# Run the backup script
-		cd "C:\temp"
-		.\my-oracle-backup.ps1 -mode backup -filename backup.dmp
-	}
-
-
-        Start-Sleep -Seconds 3
-		$archiveFile = "$backupDir\backup.dmp.7z"
-
-		# Dynamically fetch 7-Zip path from registry
-		$sevenZipPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\7-Zip").Path
-		if (Test-Path $archiveFile) { Remove-Item $archiveFile -Force }
-		# Compress backup using 7-Zip
-		& "$sevenZipPath\7z.exe" a -t7z -mx=9 $archiveFile $backupFile
-
-		
-        # Transfer compressed archive
-		Write-Host "`n📦 Copying zipped backup.dmp.7z from $sourceComputer to $destiComputer..."
-		robocopy "\\$sourceComputer\c$\temp\backup" "\\$destiComputer\c$\Temp\backup" "backup.dmp.7z" /ETA /E /MT:32
-
-#### Next is Restore in desination Computer
-
-        # Ask user to confirm before restoring backup
-		$restoreConfirm = Read-Host "`nIs $destiComputer ready for restoration? Press 'y' to continue or 'n' to exit"
-		if ($restoreConfirm -eq 'y') {
-			Write-Host "📦 Extracting backup.dmp.7z on $destiComputer..."
-		
-			Invoke-Command -ComputerName $destiComputer -ScriptBlock {
-				$backupDir = "C:\temp\backup"
-				$archiveFile = "$backupDir\backup.dmp.7z"
-				$extractPath = $backupDir
-				$sevenZipPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\7-Zip").Path
-		
-				# Extract .7z archive
-				& "$sevenZipPath\7z.exe" e -o"$extractPath" -y "$archiveFile"
-		
-				# Confirm extraction
-				if (Test-Path "$backupDir\backup.dmp") {
-					Write-Host "✅ backup.dmp extracted successfully."
-				} else {
-					Write-Host "❌ Extraction failed — backup.dmp not found." -ForegroundColor Red
-					exit
-				}
-			}
-		
-			Write-Host "🔄 Restoring backup.dmp to $destiComputer..."
-			Invoke-Command -ComputerName $destiComputer -ScriptBlock {
-				cd "C:\temp"
-				.\my-oracle-backup.ps1 -mode restore-force -filename backup.dmp
-			}
-		} else {
-			Write-Host "⏸️ Restoration skipped. You will need to manually restore later." -ForegroundColor Yellow
-			exit
-		}
-    } elseif ($condition -eq '2') {
-        Clear-Host
-        Write-host "You have selected to use the last night Backup" -ForegroundColor Cyan
-        Write-Host "`nCopying xstoredb\backup\xstore.bak.gz file to $destiComputer"
-        robocopy "\\$sourceComputer\c$\xstoredb\backup\" "\\$destiComputer\c$\Temp\backup\" xstore.bak.gz /ETA /E /MT:32
-
-        # Ask user to confirm before extracting and restoring backup
-        $restoreConfirm = Read-Host "`nIs $destiComputer ready for restoration? Press 'y' to continue or 'n' to exit"
-        if ($restoreConfirm -eq 'y') {
-            # Extract the .gz file on the destination computer using 7-Zip
-            Invoke-Command -ComputerName $destiComputer -ScriptBlock {
-                # Retrieve the path to 7-Zip
-                $7zipPath = (Get-ItemProperty -Path HKLM:\SOFTWARE\7-Zip).Path
-                $zipFile = "C:\temp\backup\xstore.bak.gz"
-                $extractPath = "C:\Temp\backup"
-            
-                # Ensure the extraction directory exists
-                if (-Not (Test-Path $extractPath)) {
-                    New-Item -Path $extractPath -ItemType Directory -Force
-                }
-
-                # Validate the zip file exists
-                if (Test-Path $zipFile) {
-                    Write-Host "Extracting file from $zipFile to $extractPath..."
-                    
-                    # Use 7-Zip to extract the file
-					### if you want to compress to zip[.7z] use below command
-					#& "$7zipPath\7z.exe" a -t7z -mx=9 "$outputArchive.7z" "$sourcePath\*"
-                    & "$7zipPath\7z.exe" e -o"$extractPath" -y "$zipFile"
-
-                    # Validate if the extracted file exists
-                    $extractedFile = Join-Path -Path $extractPath -ChildPath "xstore.bak"
-                    if (Test-Path $extractedFile) {
-                        Write-Host "Extraction successful. File located at $extractedFile"
-                    } else {
-                        Write-Host "Extraction completed, but file not found in $extractPath." -ForegroundColor Red
-                    }
-                } else {
-                    Write-Host "The zip file does not exist at $zipFile." -ForegroundColor Red
-                }
-
-                # Restore the extracted backup
-                Write-host "Restoring extracted xstore.bak to $destiComputer"
-                cd "C:\temp"
-                .\my-oracle-backup.ps1 -mode restore-force -filename xstore.bak
-                Write-Host "`nDB Restore is completed " -ForegroundColor Green
+            if (-Not (Test-Path $backupDir)) {
+                New-Item -Path $backupDir -ItemType Directory -Force
             }
-        } else {
-            Write-Host "Restoration skipped. You will need to manually restore later." -ForegroundColor Yellow
-            exit
+
+            if (Test-Path $backupFile) {
+                Write-Host "Removing old backup file..."
+                Remove-Item -Path $backupFile -Force
+            }
+
+            cd "C:\temp"
+            .\my-oracle-backup.ps1 -mode backup -filename backup.dmp
         }
+
+        Start-Sleep -Seconds 2
+
+        # Compress backup
+        $sevenZipPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\7-Zip").Path
+        if (Test-Path $archiveDmp) { Remove-Item $archiveDmp -Force }
+        & "$sevenZipPath\7z.exe" a -t7z -mx=9 $archiveDmp "\\$sourceComputer\c$\temp\backup\backup.dmp"
+
+        # Transfer to destination
+        robocopy "\\$sourceComputer\c$\temp\backup" "\\$destiComputer\c$\temp\backup" "backup.dmp.7z" /ETA /E /MT:32
+
+    } elseif ($backupChoice -eq '2') {
+        Clear-Host
+        Write-Host "Using last night's xstore.bak.gz from $sourceComputer..." -ForegroundColor Cyan
+
+        robocopy "\\$sourceComputer\c$\xstoredb\backup" "\\$destiComputer\c$\Temp\backup" $lastNightBackup /ETA /E /MT:32
+
     } else {
-        Write-Host "Invalid option selected. Please run the script again and choose 1 or 2." -ForegroundColor Red
+        Write-Host "Invalid selection. Exiting." -ForegroundColor Red
         exit
     }
 
-    # Ask user if there is another destination computer for restoration
-    while ($true) {
-        $additionalDesti = Read-Host "Do you need to restore this backup to another destination computer? Press 'y' for Yes or 'n' for No"
-        if ($additionalDesti -eq 'y') {
-            $newDestiComputer = Read-Host "Enter the new Destination Computer hostname"
-            Write-host "`nCopying backup file to $newDestiComputer"
-            robocopy "\\$sourceComputer\c$\temp\backup\" "\\$newDestiComputer\c$\Temp\backup\" backup.dmp /ETA /E /MT:32
+    # Restore on initial destination computer
+    function Restore-Backup {
+        param($computerName)
 
-            $restoreConfirm = Read-Host "`nIs $newDestiComputer ready for restoration? Press 'y' to continue or 'n' to exit"
-            if ($restoreConfirm -eq 'y') {
-                Write-host "Restoring backup.dmp to $newDestiComputer"
-                Invoke-Command -ComputerName $newDestiComputer -ScriptBlock {
+        if ($usedNewBackup) {
+            Write-Host "`nExtracting and restoring Oracle DB on $computerName..." -ForegroundColor Cyan
+
+            Invoke-Command -ComputerName $computerName -ScriptBlock {
+                $backupDir = "C:\temp\backup"
+                $archiveFile = "$backupDir\backup.dmp.7z"
+                $sevenZipPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\7-Zip").Path
+
+                if (Test-Path $archiveFile) {
+                    & "$sevenZipPath\7z.exe" e -o"$backupDir" -y "$archiveFile"
+                }
+
+                if (Test-Path "$backupDir\backup.dmp") {
+                    Write-Host "✅ Extracted backup.dmp successfully."
                     cd "C:\temp"
                     .\my-oracle-backup.ps1 -mode restore-force -filename backup.dmp
+                } else {
+                    Write-Host "❌ Failed to extract backup.dmp" -ForegroundColor Red
                 }
-            } else {
-                Write-Host "Restoration skipped for $newDestiComputer. You will need to manually restore later." -ForegroundColor Yellow
             }
+
         } else {
-            break
+            Write-Host "`nExtracting and restoring xstore.bak.gz on $computerName..." -ForegroundColor Cyan
+
+            Invoke-Command -ComputerName $computerName -ScriptBlock {
+                $zipFile = "C:\temp\backup\xstore.bak.gz"
+                $sevenZipPath = (Get-ItemProperty -Path HKLM:\SOFTWARE\7-Zip).Path
+                $extractPath = "C:\temp\backup"
+
+                if (Test-Path $zipFile) {
+                    & "$sevenZipPath\7z.exe" e -o"$extractPath" -y "$zipFile"
+                }
+
+                $extractedFile = Join-Path -Path $extractPath -ChildPath "xstore.bak"
+                if (Test-Path $extractedFile) {
+                    Write-Host "✅ Extracted xstore.bak successfully."
+                    cd "C:\temp"
+                    .\my-oracle-backup.ps1 -mode restore-force -filename xstore.bak
+                } else {
+                    Write-Host "❌ Extraction failed." -ForegroundColor Red
+                }
+            }
+        }
+    }
+
+    # Confirm restore on initial destination
+    $confirm = Read-Host "`nIs $destiComputer ready for restoration? (y/n)"
+    if ($confirm -eq 'y') {
+        Restore-Backup -computerName $destiComputer
+    } else {
+        Write-Host "⚠️ Skipping restoration on $destiComputer." -ForegroundColor Yellow
+    }
+
+    # Additional destination computers
+    while ($true) {
+        $more = Read-Host "`nRestore to another destination computer? (y/n)"
+        if ($more -ne 'y') { break }
+
+        $newDest = Read-Host "Enter the new destination computer hostname"
+
+        Write-Host "`nTransferring backup to $newDest..."
+        if ($usedNewBackup) {
+            robocopy "\\$sourceComputer\c$\temp\backup" "\\$newDest\c$\Temp\backup" "backup.dmp.7z" /ETA /E /MT:32
+        } else {
+            robocopy "\\$sourceComputer\c$\xstoredb\backup" "\\$newDest\c$\Temp\backup" $lastNightBackup /ETA /E /MT:32
+        }
+
+        $confirmRestore = Read-Host "Is $newDest ready for restore? (y/n)"
+        if ($confirmRestore -eq 'y') {
+            Restore-Backup -computerName $newDest
+        } else {
+            Write-Host "⚠️ Skipping restoration on $newDest." -ForegroundColor Yellow
         }
     }
 
 } catch {
-    Write-Host "An error occurred while fetching information " -ForegroundColor Red
-    Write-Host "Error Details: $_" -ForegroundColor Yellow
+    Write-Host "`n❌ An error occurred: $_" -ForegroundColor Red
 }
 
-Write-host "Process complete. Press any key to exit"
+Write-Host "`n✅ Process complete. Press any key to exit."
 Read-Host
